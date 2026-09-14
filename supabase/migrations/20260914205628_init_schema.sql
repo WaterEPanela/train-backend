@@ -1,18 +1,3 @@
--- Esquema inicial de train-app (issue #4).
--- Modelo de datos: trAIn-app/PLAN.md sección 4. Tools MCP: sección 6.
---
--- Decisiones que van más allá del texto literal de PLAN.md (documentadas también
--- ahí, ver nota de implementación en secciones 4 y 6):
---   - user_id denormalizado en las 8 tablas (no solo programs/availability) para que
---     RLS no dependa de joins de hasta 4 niveles.
---   - updated_at + trigger en las 8 tablas.
---   - Policies acotadas explícitamente a `to authenticated`.
---   - supa_audit (sección 6, punto 4/4) NO se habilita acá: no está disponible en la
---     imagen local de Postgres de Supabase CLI (confirmado: 0 filas en
---     pg_available_extensions para supa_audit, Postgres 17.6 local). Requeriría
---     instalarlo vía pg_tle (sí disponible) trayendo el SQL fuente de la extensión —
---     se investiga aparte cuando se construya update_program, no en esta migración.
-
 create or replace function public.set_updated_at()
 returns trigger
 language plpgsql
@@ -24,9 +9,6 @@ begin
 end;
 $$;
 
--- ============================================================
--- programs
--- ============================================================
 create table public.programs (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
@@ -50,9 +32,6 @@ create policy "user can access own rows" on public.programs
   to authenticated
   using ((select auth.uid()) = user_id);
 
--- ============================================================
--- phases
--- ============================================================
 create table public.phases (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
@@ -80,9 +59,6 @@ create policy "user can access own rows" on public.phases
   to authenticated
   using ((select auth.uid()) = user_id);
 
--- ============================================================
--- session_slots
--- ============================================================
 create table public.session_slots (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
@@ -107,15 +83,6 @@ create policy "user can access own rows" on public.session_slots
   to authenticated
   using ((select auth.uid()) = user_id);
 
--- ============================================================
--- activities
--- current_step_id referencia a ladder_steps (creada más abajo) — dependencia
--- circular con ladder_steps.activity_id. El FK se agrega con ALTER TABLE una vez
--- que ladder_steps exista, marcado DEFERRABLE INITIALLY DEFERRED para que
--- import_program pueda insertar todo el árbol en una sola transacción (generando
--- los id de ladder_steps client-side antes del INSERT en vez de confiar en el
--- default de la tabla, solo para el step inicial que current_step_id apunta).
--- ============================================================
 create table public.activities (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
@@ -141,12 +108,6 @@ create policy "user can access own rows" on public.activities
   to authenticated
   using ((select auth.uid()) = user_id);
 
--- ============================================================
--- ladder_steps
--- step_order preserva el orden del array ladder[] de PLAN.md (más fácil -> más
--- difícil) — no es un campo del modelo de dominio, es necesario para representar
--- un array ordenado en una tabla relacional.
--- ============================================================
 create table public.ladder_steps (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
@@ -175,18 +136,12 @@ create policy "user can access own rows" on public.ladder_steps
   to authenticated
   using ((select auth.uid()) = user_id);
 
--- activities.current_step_id: FK diferido, ver nota en la sección de "activities".
 alter table public.activities
   add constraint activities_current_step_id_fkey
   foreign key (current_step_id) references public.ladder_steps (id)
   on delete restrict
   deferrable initially deferred;
 
--- ============================================================
--- session_logs
--- session_slot_label es texto libre (no FK a session_slots) — así lo define
--- PLAN.md sección 4 explícitamente.
--- ============================================================
 create table public.session_logs (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
@@ -212,12 +167,6 @@ create policy "user can access own rows" on public.session_logs
   to authenticated
   using ((select auth.uid()) = user_id);
 
--- ============================================================
--- measurement_logs
--- activity_id/step_id en on delete cascade (igual que el resto de la cadena
--- estructural): measurement_logs es hijo de la jerarquía completa del programa,
--- no solo de session_logs.
--- ============================================================
 create table public.measurement_logs (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
@@ -248,9 +197,6 @@ create policy "user can access own rows" on public.measurement_logs
   to authenticated
   using ((select auth.uid()) = user_id);
 
--- ============================================================
--- availability
--- ============================================================
 create table public.availability (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
