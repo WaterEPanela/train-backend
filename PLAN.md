@@ -24,15 +24,15 @@ La app siempre fue pensada como app móvil — el stack se elige para empezar de
 
 | Capa | Elección | Por qué |
 |---|---|---|
-| App móvil (cliente principal) | Expo (React Native) + TypeScript, Expo Router, `urql` (cliente GraphQL) | Un solo código para iOS/Android desde el día uno; Expo Go permite iterar sin compilar binarios nativos, y se pasa a EAS Build recién cuando haga falta un build real (TestFlight/Play). `urql` se elige sobre Apollo Client por ser más liviano en bundle y tener menos fricción de setup en React Native/Expo |
-| Backend (API GraphQL + servidor MCP) | Next.js (solo API routes, sin páginas) + TypeScript, `@modelcontextprotocol/sdk`, `mcp-handler`, GraphQL Yoga + Pothos GraphQL | SDK oficial de MCP + `mcp-handler` para exponer el endpoint MCP como Streamable HTTP dentro de rutas de API de Next.js. Para la API que consume la app: GraphQL Yoga como handler de un único endpoint `/api/graphql` (soporte oficial documentado para App Router de Next.js) + Pothos como schema builder code-first, que infiere tipos TypeScript directamente del código sin mantener `.graphql` por separado. Ya no sirve páginas de dashboard — ese rol lo cumple la app Expo |
+| App móvil (cliente principal) | Expo (React Native) + TypeScript, Expo Router, `@tanstack/react-query` + `ky` (cliente REST) | Un solo código para iOS/Android desde el día uno; Expo Go permite iterar sin compilar binarios nativos, y se pasa a EAS Build recién cuando haga falta un build real (TestFlight/Play). `ky` es un wrapper liviano sobre `fetch` (maneja JSON, errores HTTP y reintentos sin el boilerplate de `fetch` crudo); React Query se encarga de cache/revalidación de las respuestas REST en el cliente |
+| Backend (API REST + servidor MCP) | Next.js (solo API routes, sin páginas) + TypeScript, `@modelcontextprotocol/sdk`, `mcp-handler` | SDK oficial de MCP + `mcp-handler` para exponer el endpoint MCP como Streamable HTTP dentro de rutas de API de Next.js. La API que consume la app usa Route Handlers nativos de Next.js (`app/api/.../route.ts`) con verbos HTTP estándar (GET para lectura, POST para creación, PATCH para actualización parcial — ver sección 6.1). Ya no sirve páginas de dashboard — ese rol lo cumple la app Expo |
 | Base de datos + auth | Supabase (Postgres + Auth) | Cuentas de usuario, aislamiento por Row Level Security, y un authorization server OAuth 2.1 para el conector MCP sin construir auth propio |
 | Notificaciones | Push nativo con Expo (`expo-notifications` en el cliente, `expo-server-sdk` en el backend) | Reemplaza el email del plan anterior: como el MVP ya es la app móvil, push nativo está disponible desde M1 en vez de ser una mejora futura tipo "cuando exista la app" |
 | Hosting (al desplegar) | Vercel (free tier) para el backend Next.js; Supabase hosted para DB/Auth; EAS Build + EAS Submit para la app móvil | Todo plataformas gestionadas — ver nota sobre Docker abajo |
 
-Decisión explícita de alcance: **una sola app Next.js** (sin páginas) sirve la API GraphQL (endpoint único `/api/graphql`) y el endpoint MCP (transporte HTTP/streamable) para el backend. El dashboard web queda fuera de alcance del MVP — el único cliente end-user es la app Expo. Separar el servidor MCP en su propio servicio queda para cuando el volumen o la necesidad de conexión persistente lo justifique — no antes.
+Decisión explícita de alcance: **una sola app Next.js** (sin páginas) sirve la API REST y el endpoint MCP (transporte HTTP/streamable) para el backend. El dashboard web queda fuera de alcance del MVP — el único cliente end-user es la app Expo. Separar el servidor MCP en su propio servicio queda para cuando el volumen o la necesidad de conexión persistente lo justifique — no antes.
 
-**Por qué GraphQL y no REST para la API que consume la app:** el modelo de datos (sección 4) es fuertemente anidado — un `Program` trae `phases[]`, que traen `session_slots[]`, que traen `activities[]`, que traen `ladder[]`. Servir eso por REST implica o N endpoints con distintos niveles de anidación (`/programs/:id`, `/programs/:id/phases`, `/programs/:id/phases/:id/slots`...) o un solo endpoint que siempre devuelve el árbol completo aunque la pantalla solo necesite una parte (over-fetching, relevante en una app móvil con datos móviles). Con GraphQL, cada pantalla de la app Expo pide exactamente los campos anidados que necesita en una sola request, y `urql` + generación de tipos (`graphql-codegen`) le da al cliente los mismos tipos TypeScript que ya se derivan del schema de Pothos en el backend — un solo contrato de tipos de punta a punta. Nota importante: esto **no** afecta a las tools MCP (sección 6) — esas siguen siendo llamadas MCP/JSON-RPC sobre `mcp-handler`, un protocolo distinto al de la API que consume la app; GraphQL solo reemplaza la capa REST que hablaba con Expo.
+**Por qué REST (y no GraphQL) para la API que consume la app:** el modelo de datos (sección 4) es anidado, pero en la práctica cada usuario tiene **un solo** programa activo a la vez (ver sección 8, "fuera de alcance") — no hay un grafo grande de relaciones que recorrer, así que el argumento clásico a favor de GraphQL (elegir campos anidados a medida para evitar over-fetching) pesa poco acá: `GET /api/programs/active` devuelve el árbol completo de una sola vez y ninguna pantalla necesita menos que eso. A cambio, REST evita sumar una capa entera (GraphQL Yoga + Pothos + `urql` + generación de tipos) para un backend que va a mantener una sola persona — menos piezas moviéndose es más valioso acá que la flexibilidad de queries que GraphQL ofrece y que este proyecto no llega a necesitar. **Novedad respecto del plan anterior:** para las actualizaciones parciales (registrar el push token del dispositivo, y a futuro cualquier edición de un campo suelto del perfil) se usa el verbo **PATCH** en vez de forzar al cliente a reenviar el recurso completo con PUT — ver sección 6.1.
 
 ### 3.1 Desarrollo local primero, deploy simple después
 
@@ -109,7 +109,7 @@ Cuenta de Supabase Auth. Autenticación de las llamadas MCP: **OAuth 2.1** (ver 
 > Los tokens que emite el OAuth 2.1 Server de Supabase son JWTs normales de Supabase (incluyen `user_id`, `role`, y además `client_id` del conector OAuth). **Las políticas RLS existentes se aplican automáticamente a esos tokens OAuth, igual que a una sesión normal** — `auth.uid()` funciona sin trabajo extra de nuestra parte.
 >
 > Decisión: patrón híbrido.
-> - Las **tools MCP y los resolvers GraphQL** (en el `context` de GraphQL Yoga, construido por request) crean el cliente de Supabase pasando el token OAuth/sesión del usuario como `Authorization: Bearer <token>` en cada request — RLS queda activa, y Postgres aplica el aislamiento por sí solo, no el código del resolver.
+> - Las **tools MCP y las rutas de API (Route Handlers) que consume la app móvil** crean el cliente de Supabase pasando el token OAuth/sesión del usuario como `Authorization: Bearer <token>` en cada request — RLS queda activa, y Postgres aplica el aislamiento por sí solo, no el código de la tool.
 > - **Solo el cron de recordatorios** (que necesita revisar la disponibilidad de todos los usuarios a la vez, una operación legítimamente cruzada entre usuarios) usa la `service_role` key — aislado a un único archivo, no repartido por el resto del código.
 > - Regla de política RLS: usar `(select auth.uid()) = user_id`, no `auth.uid() = user_id` (mejor plan de consulta en Postgres).
 > - A verificar durante la implementación: revisar guías recientes de seguridad de RLS en Supabase (hay patrones conocidos de mala configuración documentados) antes de escribir las políticas de cada tabla.
@@ -152,164 +152,215 @@ Cada tool define su JSON Schema de entrada con el SDK de MCP — ese schema es, 
 > 2. **Base de datos:** activar la extensión `supa_audit` de Supabase sobre `programs` (y `session_logs`/`measurement_logs`, que de paso ayuda con la idempotencia pendiente) — `create extension supa_audit cascade; select audit.enable_tracking('public.programs'::regclass);`. Dos líneas de SQL dan historial completo de cambios (`audit.record_version`) y reconstrucción del estado en cualquier punto anterior, es decir, rollback sin código propio de versionado.
 > 3. **Aplicación:** una función de validación semántica antes de aplicar `update_program` — el JSON Schema valida forma (que `target_value` sea un número), no sentido (que no sea absurdo, o que la actualización no borre todas las fases). Regla dura mínima para el MVP: rechazar una actualización que deje el programa sin fases o sin ningún slot programado.
 
-## 6.1 API GraphQL para la app móvil (ejemplos de uso)
+## 6.1 API REST para la app móvil (ejemplos de uso)
 
-Importante: esto es **distinto** de las tools MCP de la tabla de arriba. Las tools MCP las llama el agente de IA (Claude/ChatGPT/Gemini) vía protocolo MCP/JSON-RPC; el schema GraphQL de acá abajo lo consume directamente la app Expo (pantallas de solo lectura/logging manual, sección 8) contra el mismo backend Next.js, en el endpoint `/api/graphql`. Ambas capas leen y escriben las mismas tablas de Supabase, cada una con su propio mecanismo de auth (OAuth 2.1 del conector MCP vs. sesión de Supabase Auth de la app).
+Importante: esto es **distinto** de las tools MCP de la tabla de arriba. Las tools MCP las llama el agente de IA (Claude/ChatGPT/Gemini) vía protocolo MCP/JSON-RPC; los endpoints REST de acá abajo los consume directamente la app Expo (pantallas de solo lectura/logging manual, sección 8) contra el mismo backend Next.js. Ambas capas leen y escriben las mismas tablas de Supabase, cada una con su propio mecanismo de auth (OAuth 2.1 del conector MCP vs. sesión de Supabase Auth de la app).
 
-**Schema (SDL resultante del schema builder Pothos)** — recorta directo del modelo de datos de la sección 4:
+**Endpoints (Route Handlers de Next.js):**
 
-```graphql
-type Program {
-  id: ID!
-  name: String!
-  sourceNote: String
-  phases: [Phase!]!
-}
+| Método | Ruta | Uso |
+|---|---|---|
+| `GET` | `/api/programs/active` | Árbol completo del programa activo (fases, slots, actividades, ladders) — equivalente de solo-lectura a `get_program` |
+| `GET` | `/api/logs?from=&to=` | Historial de sesiones logueadas, filtrado por rango de fechas — equivalente a `get_logs` |
+| `GET` | `/api/adherence?weeks=4` | Resumen de cumplimiento — equivalente a `get_adherence` |
+| `POST` | `/api/logs` | Registra una sesión completa (crea un recurso nuevo) — equivalente de escritura a `log_session` |
+| `PATCH` | `/api/me` | Actualiza parcialmente el perfil del usuario (hoy: `pushToken`) sin reenviar el resto de los campos |
 
-type Phase {
-  id: ID!
-  name: String!
-  weekStart: Int!
-  weekEnd: Int!
-  goal: String
-  deloadWeeks: [Int!]!
-  sessionSlots: [SessionSlot!]!
-}
+**Sobre PATCH — por qué se usa acá y no antes:** `/api/me` es un recurso con varios campos (nombre, preferencias, token de push, etc.). Con `PUT` el cliente tendría que reenviar el objeto entero en cada actualización (arriesgando pisar campos que no tocó si el payload viene incompleto); con `PATCH` manda solo el campo que cambió. El contrato es **JSON Merge Patch** ([RFC 7396](https://www.rfc-editor.org/rfc/rfc7396)) — el body es un objeto parcial que se mergea sobre el recurso existente, con `Content-Type: application/merge-patch+json` — más simple que JSON Patch (RFC 6902, que usa una lista de operaciones tipo `[{ "op": "replace", "path": "/pushToken", "value": "..." }]`) y suficiente para este caso, donde no hace falta borrar campos ni reordenar arrays, solo reemplazar valores sueltos. Si en el futuro se habilita edición parcial de disponibilidad desde la app (hoy `set_availability` es solo vía MCP, sección 8), seguiría el mismo patrón: `PATCH /api/me/availability`.
 
-type SessionSlot {
-  id: ID!
-  label: String!
-  collapsePriority: Int!
-  activities: [Activity!]!
-}
+**Ejemplo — pantalla "programa activo":**
 
-type Activity {
-  activityId: ID!
-  label: String!
-  ladder: [LadderStep!]!
-  currentStepId: ID!
-}
-
-type LadderStep {
-  stepId: ID!
-  label: String!
-  targetMetric: String!
-  targetValue: String!
-}
-
-type Query {
-  myActiveProgram: Program
-  sessionLogs(from: String, to: String): [SessionLog!]!
-  adherence(weeks: Int = 4): AdherenceSummary!
-}
-
-type Mutation {
-  logSession(input: LogSessionInput!): SessionLog!
-  registerPushToken(token: String!): Boolean!
-}
-
-input LogSessionInput {
-  sessionSlotLabel: String!
-  date: String!
-  notes: String
-  measurements: [MeasurementInput!]!
-}
-
-input MeasurementInput {
-  activityId: ID!
-  stepId: ID!
-  metricType: String!
-  value: Float!
-  sequence: Int!
-}
+```http
+GET /api/programs/active
+Authorization: Bearer <token>
 ```
-
-**Ejemplo — pantalla "programa activo" (equivalente de solo-lectura a `get_program`):**
-
-```graphql
-query GetMyActiveProgram {
-  myActiveProgram {
-    id
-    name
-    phases {
-      name
-      weekStart
-      weekEnd
-      sessionSlots {
-        label
-        activities {
-          label
-          currentStepId
-          ladder {
-            stepId
-            label
-            targetMetric
-            targetValue
-          }
-        }
-      }
-    }
-  }
-}
-```
-
-La pantalla pide en una sola request exactamente los campos anidados que va a pintar (ningún endpoint REST aparte para "traer los slots de una fase" o "traer el ladder de una actividad").
-
-**Ejemplo — logging manual desde la app (equivalente de escritura a `log_session`):**
-
-```graphql
-mutation LogSession($input: LogSessionInput!) {
-  logSession(input: $input) {
-    id
-    date
-  }
-}
-```
-
-Variables que manda el cliente:
 
 ```json
 {
-  "input": {
-    "sessionSlotLabel": "Push",
-    "date": "2026-09-14",
-    "notes": "Se sintió pesado el último set",
-    "measurements": [
-      { "activityId": "act_bench_press", "stepId": "step_incline_pushup", "metricType": "reps", "value": 12, "sequence": 1 }
-    ]
-  }
+  "id": "prog_123",
+  "name": "Fuerza 16 semanas",
+  "phases": [
+    {
+      "name": "Base",
+      "weekStart": 1,
+      "weekEnd": 4,
+      "sessionSlots": [
+        {
+          "label": "Push",
+          "activities": [
+            {
+              "label": "Press banca",
+              "currentStepId": "step_incline_pushup",
+              "ladder": [
+                { "stepId": "step_incline_pushup", "label": "Flexión inclinada", "targetMetric": "reps", "targetValue": "12" }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
 }
 ```
 
-**Ejemplo — uso desde la app Expo con `urql`:**
+Como cada usuario tiene un solo programa activo (sección 8), este único `GET` ya trae todo lo que la pantalla necesita — no hace falta un endpoint separado por nivel de anidación.
+
+**Ejemplo — logging manual desde la app (equivalente de escritura a `log_session`):**
+
+```http
+POST /api/logs
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "sessionSlotLabel": "Push",
+  "date": "2026-09-14",
+  "notes": "Se sintió pesado el último set",
+  "measurements": [
+    { "activityId": "act_bench_press", "stepId": "step_incline_pushup", "metricType": "reps", "value": 12, "sequence": 1 }
+  ]
+}
+```
+
+**Ejemplo — registrar el push token con PATCH:**
+
+```http
+PATCH /api/me
+Authorization: Bearer <token>
+Content-Type: application/merge-patch+json
+
+{
+  "pushToken": "ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]"
+}
+```
+
+El resto del perfil del usuario (nombre, preferencias) no se toca — el handler en el backend solo aplica los campos presentes en el body sobre la fila existente en Supabase.
+
+**Ejemplo — uso desde la app Expo con `ky` + React Query:**
+
+```tsx
+// lib/api.ts
+import ky from 'ky';
+import { supabase } from './supabase';
+
+export const api = ky.create({
+  prefixUrl: process.env.EXPO_PUBLIC_API_URL,
+  hooks: {
+    beforeRequest: [
+      async (request) => {
+        const { data } = await supabase.auth.getSession();
+        request.headers.set('Authorization', `Bearer ${data.session?.access_token}`);
+      },
+    ],
+  },
+});
+```
 
 ```tsx
 // hooks/useActiveProgram.ts
-import { useQuery } from 'urql';
-import { GetMyActiveProgramDocument } from '../generated/graphql'; // tipado por graphql-codegen
+import { useQuery } from '@tanstack/react-query';
+import { api } from '../lib/api';
+import type { Program } from '../types';
 
 export function useActiveProgram() {
-  const [result] = useQuery({ query: GetMyActiveProgramDocument });
-  return result; // { data, fetching, error } — mismos tipos TS que el resolver del backend
+  return useQuery({
+    queryKey: ['programs', 'active'],
+    queryFn: () => api.get('api/programs/active').json<Program>(),
+  });
 }
 ```
 
 ```tsx
-// hooks/useLogSession.ts
-import { useMutation } from 'urql';
-import { LogSessionDocument } from '../generated/graphql';
+// hooks/useRegisterPushToken.ts
+import { useMutation } from '@tanstack/react-query';
+import { api } from '../lib/api';
 
-export function useLogSession() {
-  const [, logSession] = useMutation(LogSessionDocument);
-  return logSession; // logSession({ input: {...} })
+export function useRegisterPushToken() {
+  return useMutation({
+    mutationFn: (pushToken: string) =>
+      api.patch('api/me', {
+        json: { pushToken },
+        headers: { 'Content-Type': 'application/merge-patch+json' },
+      }),
+  });
 }
 ```
 
-El cliente `urql` manda el token de sesión de Supabase Auth como header `Authorization: Bearer <token>` en cada request (configurado una sola vez en el `exchange` de `urql`), el mismo patrón de la sección de RLS — no hace falta pasar `user_id` a mano en ninguna query ni mutation.
+El cliente manda el token de sesión de Supabase Auth como header `Authorization: Bearer <token>` en cada request (configurado una sola vez en el `beforeRequest` hook de `ky`), el mismo patrón de la sección de RLS — no hace falta pasar `user_id` a mano en ningún endpoint.
+
+**Del lado del backend — el Route Handler que resuelve el `PATCH`:**
+
+```ts
+// app/api/me/route.ts
+import { NextRequest, NextResponse } from 'next/server';
+import { createServerClient } from '@supabase/ssr'; // o el helper equivalente ya usado en el resto de las rutas
+
+// Whitelist explícita: un merge patch nunca debe poder tocar columnas fuera de esta lista
+// (evita que un body con { "id": "...", "role": "admin" } pise algo que no debería).
+const PATCHABLE_FIELDS = ['pushToken', 'name', 'preferences'] as const;
+type PatchableField = (typeof PATCHABLE_FIELDS)[number];
+
+export async function PATCH(request: NextRequest) {
+  const contentType = request.headers.get('content-type');
+  if (contentType !== 'application/merge-patch+json') {
+    return NextResponse.json(
+      { error: 'Content-Type debe ser application/merge-patch+json' },
+      { status: 415 }, // Unsupported Media Type
+    );
+  }
+
+  // El cliente de Supabase pasa el Bearer token del header, no la service_role key —
+  // RLS aplica sola (ver sección "Autorización a nivel de base de datos").
+  const authHeader = request.headers.get('authorization');
+  const supabase = createServerClient(/* ...config, con el token del header pasado en global headers... */);
+
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+  if (authError || !user) {
+    return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+  }
+
+  const patch = await request.json();
+
+  // RFC 7396: solo se aplican los campos presentes en el body; un valor `null`
+  // explícito borra ese campo (lo pasa a NULL) en vez de dejarlo como está.
+  const updates: Partial<Record<PatchableField, unknown>> = {};
+  for (const field of PATCHABLE_FIELDS) {
+    if (field in patch) {
+      updates[field] = patch[field] === null ? null : patch[field];
+    }
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return NextResponse.json({ error: 'Ningún campo válido en el patch' }, { status: 400 });
+  }
+
+  const { data: updatedProfile, error: updateError } = await supabase
+    .from('profiles')
+    .update(updates)
+    .eq('id', user.id) // redundante con RLS, pero explícito — no confiar solo en la policy
+    .select()
+    .single();
+
+  if (updateError) {
+    return NextResponse.json({ error: updateError.message }, { status: 500 });
+  }
+
+  return NextResponse.json(updatedProfile, { status: 200 });
+}
+```
+
+Puntos a resaltar del handler:
+- **Valida el `Content-Type`** antes de tocar nada — si alguien manda `application/json` a secas, se rechaza con `415` en vez de asumir semántica de merge patch por defecto.
+- **Whitelist de campos** (`PATCHABLE_FIELDS`) en vez de aplicar el body entero a la fila — un merge patch mal armado (o malicioso) no puede tocar columnas como `id` o `role` aunque estén en el JSON.
+- **`.eq('id', user.id)` explícito** aunque RLS ya lo garantice — defensa en profundidad, no depender de una sola capa.
+- El mismo esqueleto (auth por Bearer token, `supabase.from(...)`) se reusa para los Route Handlers de `GET /api/programs/active`, `GET /api/logs`, `GET /api/adherence` y `POST /api/logs` — cambia el verbo, el nombre de tabla y la query, no el patrón de auth.
 
 ## 7. Recordatorios (MVP)
 
-- La app Expo pide permiso de notificaciones al usuario y registra el push token del dispositivo contra el backend (extensión de `set_availability` o mutación GraphQL propia `registerPushToken` — a definir en M1/M3).
+- La app Expo pide permiso de notificaciones al usuario y registra el push token del dispositivo contra el backend (`PATCH /api/me`, ver sección 6.1).
 - El agente llama `set_availability` con los días/horarios que el usuario le dio en el chat.
 - Un cron job (Vercel Cron o Supabase Edge Function programada) revisa diariamente: ¿hay un `session_slot` de la fase activa que caiga en un día de disponibilidad y todavía no tenga `SessionLog` para esa fecha? Si sí, y falta poco para el horario declarado, se dispara una notificación push vía Expo Push Notifications (`expo-server-sdk`) al token registrado del usuario.
 - Si el usuario no completa un slot planeado y coincide con quedar por debajo de `collapse_rules.min_slots_per_week` restante en la semana, la notificación push siguiente sugiere colapsar a la versión reducida (usando `collapse_priority` para elegir qué slot sacrificar) — lógica simple basada en conteo, no IA.
