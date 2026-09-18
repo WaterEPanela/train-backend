@@ -10,6 +10,11 @@
 !.yarn/releases
 !.yarn/versions
 
+# lockfiles (each dev picks their own package manager: npm or bun)
+package-lock.json
+bun.lock
+bun.lockb
+
 # testing
 /coverage
 
