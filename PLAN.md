@@ -24,28 +24,28 @@ La app siempre fue pensada como app móvil — el stack se elige para empezar de
 
 | Capa | Elección | Por qué |
 |---|---|---|
-| App móvil (cliente principal) | Expo (React Native) + TypeScript, Expo Router, `urql` (cliente GraphQL) | Un solo código para iOS/Android desde el día uno; Expo Go permite iterar sin compilar binarios nativos, y se pasa a EAS Build recién cuando haga falta un build real (TestFlight/Play). `urql` se elige sobre Apollo Client por ser más liviano en bundle y tener menos fricción de setup en React Native/Expo |
-| Backend (API GraphQL + servidor MCP) | Next.js (solo API routes, sin páginas) + TypeScript, `@modelcontextprotocol/sdk`, `mcp-handler`, GraphQL Yoga + Pothos GraphQL | SDK oficial de MCP + `mcp-handler` para exponer el endpoint MCP como Streamable HTTP dentro de rutas de API de Next.js. Para la API que consume la app: GraphQL Yoga como handler de un único endpoint `/api/graphql` (soporte oficial documentado para App Router de Next.js) + Pothos como schema builder code-first, que infiere tipos TypeScript directamente del código sin mantener `.graphql` por separado. Ya no sirve páginas de dashboard — ese rol lo cumple la app Expo |
+| App móvil (cliente principal) | Expo (React Native) + TypeScript, Expo Router | Un solo código para iOS/Android desde el día uno; Expo Go permite iterar sin compilar binarios nativos, y se pasa a EAS Build recién cuando haga falta un build real (TestFlight/Play) |
+| Backend (API REST + servidor MCP) | Next.js (solo API routes, sin páginas) + TypeScript, `@modelcontextprotocol/sdk`, `mcp-handler` | Mismo motivo que antes: SDK oficial de MCP + `mcp-handler` para exponer el endpoint MCP como Streamable HTTP dentro de rutas de API de Next.js. Ya no sirve páginas de dashboard — ese rol lo cumple la app Expo |
 | Base de datos + auth | Supabase (Postgres + Auth) | Cuentas de usuario, aislamiento por Row Level Security, y un authorization server OAuth 2.1 para el conector MCP sin construir auth propio |
 | Notificaciones | Push nativo con Expo (`expo-notifications` en el cliente, `expo-server-sdk` en el backend) | Reemplaza el email del plan anterior: como el MVP ya es la app móvil, push nativo está disponible desde M1 en vez de ser una mejora futura tipo "cuando exista la app" |
-| Hosting (al desplegar) | Vercel (free tier) para el backend Next.js; Supabase hosted para DB/Auth; EAS Build + EAS Submit para la app móvil | Todo plataformas gestionadas — ver nota sobre Docker abajo |
+| Hosting (al desplegar) | AWS App Runner para el backend Next.js; Supabase hosted para DB/Auth; EAS Build + EAS Submit para la app móvil | Se descartó Vercel: su billing por uso (bandwidth/invocaciones) no tiene tope duro por defecto y hay casos documentados de facturas sorpresa. App Runner factura por tiempo de cómputo real (no por request/bandwidth), y AWS Budgets permite un tope de gasto con acción automática — control de costo más predecible, y el usuario ya tiene experiencia con AWS |
 
-Decisión explícita de alcance: **una sola app Next.js** (sin páginas) sirve la API GraphQL (endpoint único `/api/graphql`) y el endpoint MCP (transporte HTTP/streamable) para el backend. El dashboard web queda fuera de alcance del MVP — el único cliente end-user es la app Expo. Separar el servidor MCP en su propio servicio queda para cuando el volumen o la necesidad de conexión persistente lo justifique — no antes.
-
-**Por qué GraphQL y no REST para la API que consume la app:** el modelo de datos (sección 4) es fuertemente anidado — un `Program` trae `phases[]`, que traen `session_slots[]`, que traen `activities[]`, que traen `ladder[]`. Servir eso por REST implica o N endpoints con distintos niveles de anidación (`/programs/:id`, `/programs/:id/phases`, `/programs/:id/phases/:id/slots`...) o un solo endpoint que siempre devuelve el árbol completo aunque la pantalla solo necesite una parte (over-fetching, relevante en una app móvil con datos móviles). Con GraphQL, cada pantalla de la app Expo pide exactamente los campos anidados que necesita en una sola request, y `urql` + generación de tipos (`graphql-codegen`) le da al cliente los mismos tipos TypeScript que ya se derivan del schema de Pothos en el backend — un solo contrato de tipos de punta a punta. Nota importante: esto **no** afecta a las tools MCP (sección 6) — esas siguen siendo llamadas MCP/JSON-RPC sobre `mcp-handler`, un protocolo distinto al de la API que consume la app; GraphQL solo reemplaza la capa REST que hablaba con Expo.
+Decisión explícita de alcance: **una sola app Next.js** (sin páginas) sirve la API REST y el endpoint MCP (transporte HTTP/streamable) para el backend. El dashboard web queda fuera de alcance del MVP — el único cliente end-user es la app Expo. Separar el servidor MCP en su propio servicio queda para cuando el volumen o la necesidad de conexión persistente lo justifique — no antes.
 
 ### 3.1 Desarrollo local primero, deploy simple después
 
-Todo el desarrollo se hace en local hasta donde sea posible, y recién se toca Supabase hosted / Vercel / EAS cuando hace falta probar algo que el entorno local no puede cubrir (auth OAuth remota real, push a un dispositivo fuera de la red local, o una build para tienda):
+Todo el desarrollo se hace en local hasta donde sea posible, y recién se toca Supabase hosted / AWS / EAS cuando hace falta probar algo que el entorno local no puede cubrir (auth OAuth remota real, push a un dispositivo fuera de la red local, o una build para tienda):
 
 - **Backend + base de datos:** Supabase CLI (`supabase start`) levanta Postgres + Auth + Storage local; el backend Next.js corre con `next dev` apuntando a esa instancia local vía variables de entorno (`.env.local`). Las migraciones se escriben y prueban ahí antes de aplicarse a Supabase hosted (`supabase db push`).
 - **App móvil:** Expo Go (o un dev client si hace falta un módulo nativo que Expo Go no soporte) corriendo contra el backend local — mismo dispositivo o emulador en la misma red, o un túnel (`expo start --tunnel`) si hace falta probar desde un celular físico sin estar en la misma LAN.
-- **MCP:** durante M1/M2 se prueba con Claude Desktop vía transporte stdio contra el backend local, sin necesidad de OAuth ni de desplegar nada (ver sección 4, nota del punto 2/4). El flujo OAuth remoto solo se valida una vez desplegado a Vercel + Supabase hosted.
+- **MCP:** durante M1/M2 se prueba con Claude Desktop vía transporte stdio contra el backend local, sin necesidad de OAuth ni de desplegar nada (ver sección 4, nota del punto 2/4). El flujo OAuth remoto solo se valida una vez desplegado a AWS + Supabase hosted.
 - **Cuándo migrar a hosted:** recién al final de cada milestone, para validar que lo construido en local también funciona contra la infraestructura real — no antes, y no como parte del ciclo de iteración diario.
 
-**Sobre Docker:** se evaluó explícitamente y no se adopta para el despliegue. Vercel y Supabase hosted son plataformas gestionadas — reciben el código directamente (`git push` / `vercel deploy`, `supabase db push`) sin necesitar una imagen propia, y EAS Build/Submit hace lo mismo para la app móvil. Agregar un Dockerfile ahí sumaría una capa de mantenimiento (mantener la imagen, el build, el registry) sin ningún beneficio real en este stack — nadie más va a correr este backend fuera de Vercel. La única pieza que sí usa Docker es el stack local de Supabase CLI, y lo hace automáticamente al correr `supabase start`: no hace falta escribir ni mantener ningún Dockerfile propio para eso tampoco.
+**Sobre Docker:** AWS App Runner soporta despliegue desde código fuente (build gestionado, detecta Node.js automáticamente, sin Dockerfile) o desde una imagen de contenedor — para el MVP se usa el modo de **código fuente**, manteniendo la misma decisión que con Vercel: nada de Dockerfile propio para desplegar. Supabase hosted tampoco lo necesita, y EAS Build/Submit hace lo mismo para la app móvil. Si más adelante hiciera falta más control sobre el runtime (dependencias del sistema, versión exacta de Node), ahí sí conviene pasar App Runner a modo imagen de contenedor — no antes. La única pieza que sí usa Docker hoy es el stack local de Supabase CLI, y lo hace automáticamente al correr `supabase start`: no hace falta escribir ni mantener ningún Dockerfile propio para eso tampoco.
 
-> **Resuelto (revisión post-council, punto 1/4):** la preocupación de que MCP no funcione bien sobre funciones serverless de Vercel estaba basada en el transporte HTTP+SSE pre-2025. Desde la spec 2025-03-26 (y más aún en 2026-07-28), Streamable HTTP es stateless por defecto — cada llamada es un POST con respuesta JSON directa; el streaming solo se abre si el servidor necesita mandar mensajes no solicitados (progreso, sampling), algo que ninguna de nuestras tools necesita. Vercel mantiene oficialmente el paquete `mcp-handler` (ex `vercel-labs/mcp-for-next.js`), ya actualizado a la spec 2026-07-28, sin dependencia de Redis ni almacenamiento de sesión. Decisión: usar `mcp-handler` para el endpoint MCP dentro de la misma app Next.js, en vez de implementar el transporte a mano. Alternativa de respaldo si el free tier de Vercel se queda corto más adelante: Cloudflare Workers + `createMcpHandler` (Cloudflare hizo el mismo movimiento a stateless, deprecando su `McpAgent` basado en Durable Objects).
+**Sobre el control de costo (motivo del cambio de Vercel a AWS):** configurar un **AWS Budget** sobre la cuenta con una alerta (SNS) a un umbral bajo (ej. USD 5-10) desde el primer deploy — antes de tener tráfico real, no después. App Runner ya reduce el riesgo de raíz porque cobra por tiempo de cómputo usado, no por bandwidth/requests como Vercel; para un tope realmente automático (no solo una alerta) hace falta un paso extra — una Budget Action no puede pausar App Runner directamente (esa acción nativa solo aplica a EC2/RDS), así que un corte automático real requiere una Lambda simple disparada por la alerta de SNS que llame a `PauseService` sobre el servicio de App Runner. Para M1, con cero usuarios reales, la alerta sola alcanza; la Lambda de auto-pausa queda como mejora antes de invitar usuarios externos, no como bloqueante de M1.
+
+> **Resuelto (revisión post-council, punto 1/4):** la preocupación de que MCP no funcione bien sobre funciones serverless estaba basada en el transporte HTTP+SSE pre-2025. Desde la spec 2025-03-26 (y más aún en 2026-07-28), Streamable HTTP es stateless por defecto — cada llamada es un POST con respuesta JSON directa; el streaming solo se abre si el servidor necesita mandar mensajes no solicitados (progreso, sampling), algo que ninguna de nuestras tools necesita. `mcp-handler` (originalmente el paquete de Vercel para Next.js, `vercel-labs/mcp-for-next.js`) no depende de ningún runtime de Vercel específico — es un handler de Next.js estándar, así que corre igual en App Runner. Decisión: usar `mcp-handler` para el endpoint MCP dentro de la misma app Next.js, en vez de implementar el transporte a mano.
 
 ## 4. Modelo de datos
 
@@ -89,6 +89,13 @@ MeasurementLog: session_log_id, activity_id, step_id, metric_type, value, sequen
 Availability: user_id, day_of_week, start_time, timezone
 ```
 
+> **Nota de implementación (issue #4, `trAIn-backend`):** la migración inicial (`supabase/migrations/20260914205628_init_schema.sql`) va más allá del texto literal de esta sección en tres puntos, siguiendo el criterio de priorizar buenas prácticas de Supabase/Postgres sobre el texto del plan cuando no coinciden:
+> 1. **`user_id` denormalizado en las 8 tablas**, no solo en `programs`/`availability` como sugiere la lista de campos de arriba. Sin esto, las políticas RLS de `phases`/`session_slots`/`activities`/`ladder_steps`/`session_logs`/`measurement_logs` necesitarían un `EXISTS` con hasta 4 joins para llegar al dueño — Supabase recomienda evitar eso denormalizando el `user_id` en cada tabla hija. La cadena de FKs estructurales (`program_id`, `phase_id`, etc.) se mantiene igual para integridad referencial; `user_id` es redundante a propósito, solo para RLS.
+> 2. **`updated_at` + trigger en las 8 tablas** (no mencionado arriba, bookkeeping estándar).
+> 3. **Policies RLS acotadas a `to authenticated`** explícitamente (si no, aplican también a `anon`).
+>
+> `activities.current_step_id` (ver más arriba en esta sección) forma una dependencia circular con `ladder_steps.activity_id` — se resuelve en la migración agregando ese FK con `ALTER TABLE` después de crear `ladder_steps`, marcado `DEFERRABLE INITIALLY DEFERRED` para que `import_program` pueda insertar el árbol completo en una sola transacción.
+
 ### User
 Cuenta de Supabase Auth. Autenticación de las llamadas MCP: **OAuth 2.1** (ver resolución del punto 2 más abajo), no API key.
 
@@ -100,7 +107,9 @@ Cuenta de Supabase Auth. Autenticación de las llamadas MCP: **OAuth 2.1** (ver 
 > - **Claude Pro** (ya lo tenemos): soporta custom connectors remotos completos, sin costo adicional.
 > - **ChatGPT**: Developer Mode/custom connectors requieren mínimo Plus/Pro (de pago) y están en beta; los connectors *completamente* con capacidad de escritura están restringidos a workspaces Business/Enterprise/Edu — con Plus/Pro la escritura (`log_session`, `update_program`) podría estar limitada. Verificar al probar, no asumir paridad con Claude.
 > - **Gemini Spark**: requiere Google AI Pro o Ultra (de pago).
-> - **Camino gratis para desarrollar sin pagar nada extra:** probar el servidor MCP en local con Claude Desktop vía transporte **stdio** (proceso local, sin red, sin OAuth) durante M1/M2 mientras se construyen las tools; agregar el flujo OAuth remoto recién al desplegar a Vercel, y validarlo primero con la cuenta Claude Pro existente antes de pagar por Plus de ChatGPT o Google AI Pro solo para probar.
+> - **Camino gratis para desarrollar sin pagar nada extra:** probar el servidor MCP en local con Claude Desktop vía transporte **stdio** (proceso local, sin red, sin OAuth) durante M1/M2 mientras se construyen las tools; agregar el flujo OAuth remoto recién al desplegar a AWS, y validarlo primero con la cuenta Claude Pro existente antes de pagar por Plus de ChatGPT o Google AI Pro solo para probar.
+>
+> **Verificado (2026-10-02):** `claude_desktop_config.json` solo acepta servidores por `command`/`args` (stdio) — no una URL HTTP directa; como `mcp-handler` expone el endpoint MCP únicamente como HTTP (`/api/mcp` de `trAIn-backend`), el "camino gratis" de arriba necesita un wrapper stdio↔HTTP: `npx -y mcp-remote http://localhost:3000/api/mcp` como `command`/`args` del servidor en esa config. Con eso, Claude Desktop (reiniciado) listó la tool `ping` y, al invocarla, devolvió `{"message":"pong"}` — transporte local end-to-end confirmado, sin tocar OAuth. Pendiente para las tools reales (`import_program`, etc.): escribir bien `description` e `inputSchema` de cada una — el modelo decide cuándo y cómo usarlas leyendo eso, no alcanza con el nombre (detectado al probar `ping`, cuya descripción actual, "Ping for connection", es mínima a propósito).
 
 ### Autorización a nivel de base de datos (RLS)
 
@@ -109,7 +118,7 @@ Cuenta de Supabase Auth. Autenticación de las llamadas MCP: **OAuth 2.1** (ver 
 > Los tokens que emite el OAuth 2.1 Server de Supabase son JWTs normales de Supabase (incluyen `user_id`, `role`, y además `client_id` del conector OAuth). **Las políticas RLS existentes se aplican automáticamente a esos tokens OAuth, igual que a una sesión normal** — `auth.uid()` funciona sin trabajo extra de nuestra parte.
 >
 > Decisión: patrón híbrido.
-> - Las **tools MCP y los resolvers GraphQL** (en el `context` de GraphQL Yoga, construido por request) crean el cliente de Supabase pasando el token OAuth/sesión del usuario como `Authorization: Bearer <token>` en cada request — RLS queda activa, y Postgres aplica el aislamiento por sí solo, no el código del resolver.
+> - Las **tools MCP y las rutas de API que consume la app móvil** crean el cliente de Supabase pasando el token OAuth/sesión del usuario como `Authorization: Bearer <token>` en cada request — RLS queda activa, y Postgres aplica el aislamiento por sí solo, no el código de la tool.
 > - **Solo el cron de recordatorios** (que necesita revisar la disponibilidad de todos los usuarios a la vez, una operación legítimamente cruzada entre usuarios) usa la `service_role` key — aislado a un único archivo, no repartido por el resto del código.
 > - Regla de política RLS: usar `(select auth.uid()) = user_id`, no `auth.uid() = user_id` (mejor plan de consulta en Postgres).
 > - A verificar durante la implementación: revisar guías recientes de seguridad de RLS en Supabase (hay patrones conocidos de mala configuración documentados) antes de escribir las políticas de cada tabla.
@@ -150,168 +159,15 @@ Cada tool define su JSON Schema de entrada con el SDK de MCP — ese schema es, 
 > **Resuelto (revisión post-council, punto 4/4):** `update_program` era la tool más peligrosa del contrato — reescribe el programa activo según el razonamiento del agente, sin versionado ni forma de revertir un cambio erróneo. Tres capas de defensa, cada una cubriendo lo que las otras no cubren:
 > 1. **Protocolo:** anotar `update_program` con `destructiveHint: true` (tabla de arriba) — los clientes MCP (Claude, ChatGPT, Gemini Spark) usan esta annotation para decidir si piden confirmación al usuario antes de ejecutar la tool. Es gratis y estándar, pero es una señal informativa, no una garantía — no puede ser la única defensa.
 > 2. **Base de datos:** activar la extensión `supa_audit` de Supabase sobre `programs` (y `session_logs`/`measurement_logs`, que de paso ayuda con la idempotencia pendiente) — `create extension supa_audit cascade; select audit.enable_tracking('public.programs'::regclass);`. Dos líneas de SQL dan historial completo de cambios (`audit.record_version`) y reconstrucción del estado en cualquier punto anterior, es decir, rollback sin código propio de versionado.
+>
+>    **Actualización (issue #4):** verificado contra la instancia local de Supabase CLI (Postgres 17.6) — `supa_audit` **no está disponible** ahí (`pg_available_extensions` no lo lista), así que no son "dos líneas" como se asumía. Sí está disponible `pg_tle` (Trusted Language Extensions), que es el mecanismo por el que Supabase lo instala en su plataforma hosteada — instalarlo a mano requeriría traer el SQL fuente de la extensión vía `pgtle.install_extension(...)`. Queda pendiente de investigar cuando se construya `update_program` (todavía no tiene issue); no se activó en la migración inicial de la sección 4 para no bloquearla con algo no resuelto.
 > 3. **Aplicación:** una función de validación semántica antes de aplicar `update_program` — el JSON Schema valida forma (que `target_value` sea un número), no sentido (que no sea absurdo, o que la actualización no borre todas las fases). Regla dura mínima para el MVP: rechazar una actualización que deje el programa sin fases o sin ningún slot programado.
-
-## 6.1 API GraphQL para la app móvil (ejemplos de uso)
-
-Importante: esto es **distinto** de las tools MCP de la tabla de arriba. Las tools MCP las llama el agente de IA (Claude/ChatGPT/Gemini) vía protocolo MCP/JSON-RPC; el schema GraphQL de acá abajo lo consume directamente la app Expo (pantallas de solo lectura/logging manual, sección 8) contra el mismo backend Next.js, en el endpoint `/api/graphql`. Ambas capas leen y escriben las mismas tablas de Supabase, cada una con su propio mecanismo de auth (OAuth 2.1 del conector MCP vs. sesión de Supabase Auth de la app).
-
-**Schema (SDL resultante del schema builder Pothos)** — recorta directo del modelo de datos de la sección 4:
-
-```graphql
-type Program {
-  id: ID!
-  name: String!
-  sourceNote: String
-  phases: [Phase!]!
-}
-
-type Phase {
-  id: ID!
-  name: String!
-  weekStart: Int!
-  weekEnd: Int!
-  goal: String
-  deloadWeeks: [Int!]!
-  sessionSlots: [SessionSlot!]!
-}
-
-type SessionSlot {
-  id: ID!
-  label: String!
-  collapsePriority: Int!
-  activities: [Activity!]!
-}
-
-type Activity {
-  activityId: ID!
-  label: String!
-  ladder: [LadderStep!]!
-  currentStepId: ID!
-}
-
-type LadderStep {
-  stepId: ID!
-  label: String!
-  targetMetric: String!
-  targetValue: String!
-}
-
-type Query {
-  myActiveProgram: Program
-  sessionLogs(from: String, to: String): [SessionLog!]!
-  adherence(weeks: Int = 4): AdherenceSummary!
-}
-
-type Mutation {
-  logSession(input: LogSessionInput!): SessionLog!
-  registerPushToken(token: String!): Boolean!
-}
-
-input LogSessionInput {
-  sessionSlotLabel: String!
-  date: String!
-  notes: String
-  measurements: [MeasurementInput!]!
-}
-
-input MeasurementInput {
-  activityId: ID!
-  stepId: ID!
-  metricType: String!
-  value: Float!
-  sequence: Int!
-}
-```
-
-**Ejemplo — pantalla "programa activo" (equivalente de solo-lectura a `get_program`):**
-
-```graphql
-query GetMyActiveProgram {
-  myActiveProgram {
-    id
-    name
-    phases {
-      name
-      weekStart
-      weekEnd
-      sessionSlots {
-        label
-        activities {
-          label
-          currentStepId
-          ladder {
-            stepId
-            label
-            targetMetric
-            targetValue
-          }
-        }
-      }
-    }
-  }
-}
-```
-
-La pantalla pide en una sola request exactamente los campos anidados que va a pintar (ningún endpoint REST aparte para "traer los slots de una fase" o "traer el ladder de una actividad").
-
-**Ejemplo — logging manual desde la app (equivalente de escritura a `log_session`):**
-
-```graphql
-mutation LogSession($input: LogSessionInput!) {
-  logSession(input: $input) {
-    id
-    date
-  }
-}
-```
-
-Variables que manda el cliente:
-
-```json
-{
-  "input": {
-    "sessionSlotLabel": "Push",
-    "date": "2026-09-14",
-    "notes": "Se sintió pesado el último set",
-    "measurements": [
-      { "activityId": "act_bench_press", "stepId": "step_incline_pushup", "metricType": "reps", "value": 12, "sequence": 1 }
-    ]
-  }
-}
-```
-
-**Ejemplo — uso desde la app Expo con `urql`:**
-
-```tsx
-// hooks/useActiveProgram.ts
-import { useQuery } from 'urql';
-import { GetMyActiveProgramDocument } from '../generated/graphql'; // tipado por graphql-codegen
-
-export function useActiveProgram() {
-  const [result] = useQuery({ query: GetMyActiveProgramDocument });
-  return result; // { data, fetching, error } — mismos tipos TS que el resolver del backend
-}
-```
-
-```tsx
-// hooks/useLogSession.ts
-import { useMutation } from 'urql';
-import { LogSessionDocument } from '../generated/graphql';
-
-export function useLogSession() {
-  const [, logSession] = useMutation(LogSessionDocument);
-  return logSession; // logSession({ input: {...} })
-}
-```
-
-El cliente `urql` manda el token de sesión de Supabase Auth como header `Authorization: Bearer <token>` en cada request (configurado una sola vez en el `exchange` de `urql`), el mismo patrón de la sección de RLS — no hace falta pasar `user_id` a mano en ninguna query ni mutation.
 
 ## 7. Recordatorios (MVP)
 
-- La app Expo pide permiso de notificaciones al usuario y registra el push token del dispositivo contra el backend (extensión de `set_availability` o mutación GraphQL propia `registerPushToken` — a definir en M1/M3).
+- La app Expo pide permiso de notificaciones al usuario y registra el push token del dispositivo contra el backend (extensión de `set_availability` o endpoint propio `register_push_token` — a definir en M1/M3).
 - El agente llama `set_availability` con los días/horarios que el usuario le dio en el chat.
-- Un cron job (Vercel Cron o Supabase Edge Function programada) revisa diariamente: ¿hay un `session_slot` de la fase activa que caiga en un día de disponibilidad y todavía no tenga `SessionLog` para esa fecha? Si sí, y falta poco para el horario declarado, se dispara una notificación push vía Expo Push Notifications (`expo-server-sdk`) al token registrado del usuario.
+- Un cron job (Amazon EventBridge Scheduler invocando el endpoint, o una Supabase Edge Function programada) revisa diariamente: ¿hay un `session_slot` de la fase activa que caiga en un día de disponibilidad y todavía no tenga `SessionLog` para esa fecha? Si sí, y falta poco para el horario declarado, se dispara una notificación push vía Expo Push Notifications (`expo-server-sdk`) al token registrado del usuario.
 - Si el usuario no completa un slot planeado y coincide con quedar por debajo de `collapse_rules.min_slots_per_week` restante en la semana, la notificación push siguiente sugiere colapsar a la versión reducida (usando `collapse_priority` para elegir qué slot sacrificar) — lógica simple basada en conteo, no IA.
 - Queda pendiente (ya señalado en la revisión del council, sección de riesgos): el cron diario fijo no resuelve bien timezones reales de usuarios en zonas distintas — a revisar en M3, sea con un cron más frecuente filtrando por ventana horaria, o con Supabase Edge Functions programadas por usuario.
 
@@ -326,7 +182,7 @@ El cliente `urql` manda el token de sesión de Supabase Auth como header `Author
 
 ## 9. Roadmap
 
-1. **M1 — Esqueleto:** backend Next.js (API + MCP) + Supabase local (schema de datos de la sección 4) + servidor MCP con `import_program` y `get_program` funcionando end-to-end contra Claude Desktop (stdio, todo local) — y en paralelo, esqueleto de la app Expo (navegación básica, login contra Supabase Auth local) corriendo con Expo Go. Migración a claude.ai Connectors (remoto, OAuth) y a Supabase hosted/Vercel recién al cierre del milestone.
+1. **M1 — Esqueleto:** backend Next.js (API + MCP) + Supabase local (schema de datos de la sección 4) + servidor MCP con `import_program` y `get_program` funcionando end-to-end contra Claude Desktop (stdio, todo local) — y en paralelo, esqueleto de la app Expo (navegación básica, login contra Supabase Auth local) corriendo con Expo Go. Migración a claude.ai Connectors (remoto, OAuth) y a Supabase hosted/AWS recién al cierre del milestone.
 2. **M2 — Logging y progresión determinística:** `log_session`, `get_logs`, motor de evaluación de `progression_rule` (por `activity_id`/`step_id`), vista en la app Expo de solo lectura del programa activo y del historial.
 3. **M3 — Disponibilidad y recordatorios:** `set_availability`, registro de push token desde la app, cron de recordatorios por push (Expo), lógica de colapso de slots.
 4. **M4 — Revisión asistida por IA:** `get_adherence`, `update_program`, validar el flujo completo "revisá mi progreso y ajustá el plan" con un programa real (el de `rutina.md`, dominio de entrenamiento) de punta a punta.
@@ -335,7 +191,7 @@ El cliente `urql` manda el token de sesión de Supabase Auth como header `Author
 
 - Probar el flujo completo en local (Supabase CLI + Next.js dev + Claude Desktop stdio), importando el programa real de 16 semanas (`rutina.md` traducido al schema de la sección 4) y verificando que `import_program` lo acepta sin pérdida de estructura (fases, deloads, ladders).
 - Simular logs de varias sesiones y confirmar que `progression_rule` avanza `current_step_id` correctamente por ID, sin intervención manual.
-- Probar `set_availability` + registro de push token desde la app Expo + disparo real de una notificación push en un entorno de staging (Supabase hosted + Vercel desplegado).
+- Probar `set_availability` + registro de push token desde la app Expo + disparo real de una notificación push en un entorno de staging (Supabase hosted + AWS App Runner desplegado).
 - Ejecutar `update_program` desde una conversación real pidiéndole a Claude que reevalúe el progreso, y confirmar que el cambio se refleja en `get_program` (visible también en la app Expo).
 - Validar que el schema realmente es agnóstico de dominio: importar un segundo programa de un dominio distinto (ej. un plan de lectura simple armado a mano) y confirmar que `import_program`/`log_session`/`progression_rule` funcionan sin ningún cambio de código — esta prueba es la que confirma o refuta el reframe de la sección 1.
-- Solo después de validar todo lo anterior en local, repetir el flujo end-to-end contra Supabase hosted + Vercel + claude.ai Connectors (OAuth remoto) y una build de Expo (Expo Go o dev client) apuntando a esa infraestructura real.
+- Solo después de validar todo lo anterior en local, repetir el flujo end-to-end contra Supabase hosted + AWS App Runner + claude.ai Connectors (OAuth remoto) y una build de Expo (Expo Go o dev client) apuntando a esa infraestructura real.
