@@ -21,8 +21,6 @@ Sin páginas ni UI — ver sección 3 de `PLAN.md` sobre por qué el dashboard w
 
 ## Estado actual
 
-Todavía no scaffoldeado. Seguimiento de tareas en el [GitHub Project "train-app — Fase 1"](https://github.com/users/WaterEPanela/projects/1) (issues en `trAIn-app`):
-
 - [#3](https://github.com/WaterEPanela/trAIn-app/issues/3) Instalar Supabase CLI y levantar el stack local
 - [#4](https://github.com/WaterEPanela/trAIn-app/issues/4) Migración SQL del modelo de datos inicial
 - [#5](https://github.com/WaterEPanela/trAIn-app/issues/5) Scaffold del backend Next.js
@@ -37,3 +35,30 @@ Todo el desarrollo se hace en local antes de tocar Supabase hosted o AWS (ver se
 supabase start   # Postgres + Auth local (requiere Docker)
 npm run dev       # backend Next.js, una vez scaffoldeado
 ```
+
+El proyecto utiliza una arquitectura modular para separar los endpoints, la lógica de negocio, la infraestructura y los elementos compartidos.
+
+## Estructura del proyecto
+
+```text
+train-backend/
+│
+├── app/
+│   └── api/
+│       └── route.ts
+│
+├── src/
+│   ├── config/
+│   ├── infrastructure/
+│   ├── modules/
+│   └── shared/
+│
+├── supabase/
+│
+├── .env.local
+│
+├── .gitignore
+├── next.config.ts
+├── package.json
+├── tsconfig.json
+└── README.md
