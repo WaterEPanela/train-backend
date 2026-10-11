@@ -174,10 +174,17 @@ Cada tool define su JSON Schema de entrada con el SDK de MCP — ese schema es, 
 ## 8. Fuera de alcance del MVP (explícito)
 
 - Dashboard web — el cliente end-user del MVP es exclusivamente la app móvil (Expo); un panel de administración web queda para más adelante si hace falta.
-- Multi-programa simultáneo por usuario (un programa activo a la vez — podría ser de cualquier dominio, pero uno solo).
+- ~~Multi-programa simultáneo por usuario~~ — reemplazado por el modelo de slots (nota abajo).
 - Editor visual de programas en la app — el único camino de creación/edición en el MVP es vía MCP (el agente); la app móvil es de solo lectura/logging manual como fallback.
 - Motor de recomendación de progresión cualitativo dentro del backend — vive en el agente, no en el código.
-- Pagos/monetización — se decide después de validar retención con usuarios reales.
+- Pagos/monetización — se decide después de validar retención con usuarios reales. (El *modelo* de slots ya existe en la DB; el cobro, no.)
+
+> **Decisión (2026-10-11): slots de programa.** Cada programa ocupa un slot mientras existe; no hay programas archivados ni inactivos — un plan fuera de un slot no existe en la app, porque el valor del slot es la disponibilidad y el seguimiento del plan. La cuenta gratuita tiene 1 slot; se pueden comprar más, de forma permanente (pago único, los slots nunca bajan, así que no hay lógica de downgrade).
+> - **DB** (`supabase/migrations/20261011180000_program_slots.sql`): `user_entitlements.program_slots` (sin fila = 1; solo lectura para el usuario, lo escribe el backend con `service_role`, ej. un webhook de pago). Un trigger `before insert` en `programs` rechaza con `slots_full` si no queda slot — la regla vive en Postgres, no en un cliente.
+> - **Reemplazo:** `import_program(payload, replace_program_id)` borra el programa elegido (con su historial, por cascada) y crea el nuevo en la misma transacción; solo puede borrar programas del propio usuario (`program_not_found` si no).
+> - **MCP:** `import_program` nunca borra; ante `slots_full` devuelve la lista de programas y el agente debe preguntarle al usuario cuál reemplazar. `replace_program` (con `destructiveHint: true`) hace el reemplazo con el id que el usuario eligió. `get_program` acepta `program_id` y devuelve el uso de slots.
+> - **App:** muestra todos los programas del usuario (selector en la pantalla Programa) y el uso de slots en Ajustes.
+> - De paso: `programs.start_date` (semana 1 del programa) y `position` en `session_slots`/`activities` para conservar el orden en que el LLM escribió el programa.
 - UI específica por dominio (gráficos de fuerza vs. gráficos de páginas leídas vs. splits de running) — el MVP usa una vista genérica de "actividad + métrica + valor" para todos los dominios; visualizaciones a medida quedan para después de validar qué dominio(s) engancha(n).
 
 ## 9. Roadmap
