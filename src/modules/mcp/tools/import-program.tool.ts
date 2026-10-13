@@ -17,19 +17,19 @@ export function registerImportProgramTool(server: McpServer) {
     {
       title: "Import program",
       description:
-        "Crea un Program completo (fases, session_slots, activities, ladder, " +
-        "progression_rule, collapse_rules) para el usuario autenticado. " +
-        "Cada programa ocupa un slot del usuario (la cuenta gratuita tiene 1). " +
-        "Nunca borra nada: si no queda ningún slot libre falla con " +
-        "error 'slots_full' y devuelve la lista de programas actuales. En ese caso " +
-        "pregúntale al usuario cuál quiere reemplazar (avisándole que ese programa " +
-        "y todo su historial se borran) y usa replace_program con el id que elija. " +
-        "Nunca elijas tú cuál reemplazar.",
+        "Creates a complete Program (phases, session_slots, activities, ladder, " +
+        "progression_rule, collapse_rules) for the authenticated user. " +
+        "Each program takes one of the user's slots (free accounts have 1). " +
+        "It never deletes anything: if no slot is free it fails with error " +
+        "'slots_full' and returns the user's current programs. In that case, ask " +
+        "the user which one to replace (warning them that program and all its " +
+        "history will be deleted) and call replace_program with the id they pick. " +
+        "Never choose which program to replace yourself.",
       inputSchema: { program: ProgramInputSchema },
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     async ({ program }) => {
-      const accessToken = resolveUserAccessToken();
+      const accessToken = await resolveUserAccessToken();
       const supabase = createSupabaseClientForUser(accessToken);
 
       const { data, error } = await supabase.rpc("import_program", {
@@ -42,9 +42,9 @@ export function registerImportProgramTool(server: McpServer) {
           {
             error: "slots_full",
             message:
-              `El usuario está usando ${summary.used} de ${summary.slots} slots. ` +
-              "Para importar este programa debe elegir cuál reemplazar (se borra " +
-              "junto con su historial) o conseguir más slots.",
+              `The user is using ${summary.used} of ${summary.slots} slots. ` +
+              "To import this program they must choose one to replace (it is " +
+              "deleted along with its history) or get more slots.",
             ...summary,
           },
           true,

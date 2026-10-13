@@ -22,8 +22,8 @@ export async function getSlotSummary(supabase: SupabaseClient) {
     supabase.from("user_entitlements").select("program_slots").maybeSingle(),
   ]);
 
-  if (programsResult.error) throw programsResult.error;
-  if (entitlementsResult.error) throw entitlementsResult.error;
+  if (programsResult.error) throw new Error(programsResult.error.message);
+  if (entitlementsResult.error) throw new Error(entitlementsResult.error.message);
 
   // No entitlements row means the free tier: one slot.
   const slots = entitlementsResult.data?.program_slots ?? 1;
