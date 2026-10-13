@@ -1,10 +1,3 @@
--- Partial program edits (update_program): a list of operations addressed by id,
--- applied in one transaction and validated as a whole at the end.
--- * Removing part of a plan never deletes logged history: its measurements are
---   detached first (detached_at + the label they had), and the foreign keys no
---   longer cascade, so a stray delete fails instead of erasing logs.
--- * programs.revision enables optimistic concurrency (expected_revision).
-
 alter table public.measurement_logs
   drop constraint measurement_logs_activity_id_fkey,
   drop constraint measurement_logs_step_id_fkey,
@@ -162,8 +155,6 @@ begin
 end;
 $$;
 
--- Keeps the history of activities leaving the plan: each measurement remembers
--- the step (or activity) label it was logged under.
 create or replace function private.detach_logs(p_activity_ids uuid[], p_step_ids uuid[] default '{}')
 returns void
 language sql
@@ -180,7 +171,6 @@ as $$
   where ml.activity_id = any (p_activity_ids) or ml.step_id = any (p_step_ids);
 $$;
 
--- Moves p_id to p_position (1-based, clamped) among its siblings and renumbers them.
 create or replace function private.place(
   p_table text, p_parent_column text, p_order_column text, p_id uuid, p_position int
 )
@@ -218,7 +208,6 @@ begin
 end;
 $$;
 
--- Which program a plan entity belongs to (null when it does not exist or is not visible).
 create or replace function private.program_of(p_kind text, p_id uuid)
 returns uuid
 language sql

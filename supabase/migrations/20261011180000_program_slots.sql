@@ -1,7 +1,3 @@
--- Program slots: a program only exists while it occupies a slot. Free users get
--- one slot; extra slots are bought (one-off, they never go down). Importing a
--- program with every slot taken requires replacing (deleting) one of them.
-
 create table public.user_entitlements (
   user_id uuid primary key references auth.users (id) on delete cascade,
   program_slots int not null default 1 check (program_slots >= 1),
@@ -15,14 +11,11 @@ create trigger set_updated_at
 
 alter table public.user_entitlements enable row level security;
 
--- Read-only for the user: slots are granted server-side (service_role, e.g. a
--- payment webhook), never by the client.
 create policy "user can read own entitlements" on public.user_entitlements
   for select
   to authenticated
   using ((select auth.uid()) = user_id);
 
--- Users without a row have the free slot.
 create or replace function public.program_slots_for(p_user_id uuid)
 returns int
 language sql
@@ -38,14 +31,12 @@ $$;
 
 revoke execute on function public.program_slots_for(uuid) from public, anon, authenticated;
 
--- Users who already had more programs than the free slot keep them all.
 insert into public.user_entitlements (user_id, program_slots)
 select user_id, count(*)
 from public.programs
 group by user_id
 having count(*) > 1;
 
--- Enforced in the database so no client (app, MCP, a bug) can go over the limit.
 create or replace function public.enforce_program_slots()
 returns trigger
 language plpgsql
@@ -56,7 +47,6 @@ declare
   v_used int;
   v_slots int;
 begin
-  -- Serialize concurrent imports of the same user.
   perform pg_advisory_xact_lock(hashtext('program_slots:' || new.user_id::text));
 
   select count(*) into v_used from public.programs where user_id = new.user_id;
@@ -77,16 +67,12 @@ create trigger enforce_program_slots
   before insert on public.programs
   for each row execute function public.enforce_program_slots();
 
--- Week 1 of the program; the app counts the current week from here.
 alter table public.programs add column start_date date not null default current_date;
 update public.programs set start_date = created_at::date;
 
--- Keep the order the program was written in. import_program inserts everything
--- in one transaction, so created_at is identical and cannot order rows.
 alter table public.session_slots add column position int not null default 0;
 alter table public.activities add column position int not null default 0;
 
--- Existing rows: the original order is lost; fall back to a stable order.
 update public.session_slots s
 set position = ordered.position
 from (
@@ -103,8 +89,6 @@ from (
 ) ordered
 where a.id = ordered.id;
 
--- import_program gains positions and an optional program to replace. The old
--- one-argument signature is dropped; calls without replace_program_id keep working.
 drop function public.import_program(jsonb);
 
 create or replace function public.import_program(payload jsonb, replace_program_id uuid default null)
@@ -132,7 +116,6 @@ begin
     raise exception 'import_program requires an authenticated user';
   end if;
 
-  -- Replacing deletes the old program and, by cascade, all of its logs.
   if replace_program_id is not null then
     delete from public.programs
     where id = replace_program_id and user_id = v_user_id;

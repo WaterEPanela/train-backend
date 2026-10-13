@@ -1,11 +1,3 @@
--- User-created plans and off-plan logging.
--- * A phase may have no weeks: plans made in the app are open-ended unless the
---   user turns phases on.
--- * programs.origin says who wrote the plan, so the agent knows when it is
---   auditing the user's own plan.
--- * A measurement may belong to no activity (adhoc_label): an extra exercise
---   logged in a session without adding it to the plan.
-
 alter table public.phases
   alter column week_start drop not null,
   alter column week_end drop not null,
@@ -262,8 +254,6 @@ begin
     );
   end loop;
 
-  -- Extras: activities done outside the plan. They are logged by label only, or,
-  -- with add_to_plan, appended to the session slot first so they repeat next time.
   for v_extra in select * from jsonb_array_elements(coalesce(payload->'extras', '[]'::jsonb))
   loop
     if coalesce(v_extra->>'label', '') = '' or coalesce(v_extra->>'metric', '') = '' then
@@ -338,8 +328,6 @@ begin
     end loop;
   end loop;
 
-  -- Only measurements of the activity's current step can advance it, so logging
-  -- an older variation never moves the ladder.
   for v_pair in
     select distinct ml.activity_id, ml.step_id
     from public.measurement_logs ml

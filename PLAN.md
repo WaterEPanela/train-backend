@@ -144,6 +144,13 @@ Dos niveles, no uno:
 
 2. **Asistida por IA (requiere que el usuario se lo pida explícitamente en un chat).** Decisiones cualitativas — transición de fase, ajustar el deload, aplicar un benchmark tipo "si ganás fuerza pero no tamaño, subí el volumen" (o su equivalente en otro dominio: "si leés rápido pero no retenés, agregá resúmenes") — no se automatizan en el backend. El usuario le dice a su agente "revisá mi progreso y ajustá el plan"; el agente lee el historial vía `get_logs`/`get_adherence` (incluyendo las `notes` que el usuario fue dejando), razona con las reglas que el propio documento original ya trae en texto, y escribe los cambios vía `update_program`. El backend no necesita un motor de reglas para esto — es la razón principal por la que el MVP es viable con poco código de dominio.
 
+> **Reglas del registro (antes en comentarios de las migraciones).**
+> - `log_session` es la única implementación: la llaman la app y la tool MCP, así que las reglas viven en un solo lugar. Cada envío trae un `client_id` generado por el cliente; reintentar no registra dos veces.
+> - Solo las mediciones del escalón **actual** pueden avanzar una actividad: registrar una variación anterior nunca mueve la escalera.
+> - `progression_rule_met` es genérica (métrica, comparación, umbral, modo "todas" o "alguna"). Un valor no numérico o una comparación desconocida nunca dispara, así que una regla mal formada no hace avanzar a nadie.
+> - El límite de slots lo hace cumplir un trigger en Postgres (con un lock por usuario para importaciones concurrentes), no un cliente.
+> - `position` existe porque `import_program` inserta todo en una transacción: `created_at` es idéntico y no sirve para ordenar.
+
 > **Decisión (2026-10-13): series exactas, nunca supuestas.** El número de series lo fija el agente, no el sistema ni el usuario: `ladder_steps.target_sets` es un entero exacto y `import_program` lo exige para escalones por `reps` (si la fuente dice "2-3 series", el agente elige el número y explica el criterio en `source_note`). La app muestra exactamente esas series; si un plan viejo no lo define, no inventa un número: arranca con una y avisa que hay que pedírselo al agente. Si el usuario hace menos series, se registran tal cual para que el agente lo vea al revisar, y una regla "en todas las series" solo se cumple si se hicieron todas las recomendadas (`progression_rule_met(..., required_count)`). Lo mismo para los umbrales de la regla: `progression_rule.value` y `on_trigger.reset_value_to` son `number` en el schema; ni el backend ni la app interpretan texto libre (`target_value` es solo para mostrar).
 
 ## 6. Tools MCP (contrato inicial)

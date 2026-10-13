@@ -12,7 +12,6 @@ export function jsonResult(payload: unknown, isError = false): ToolResult {
   };
 }
 
-/** The user's programs (each one fills a slot) and how many slots they have. */
 export async function getSlotSummary(supabase: SupabaseClient) {
   const [programsResult, entitlementsResult] = await Promise.all([
     supabase
@@ -25,7 +24,6 @@ export async function getSlotSummary(supabase: SupabaseClient) {
   if (programsResult.error) throw new Error(programsResult.error.message);
   if (entitlementsResult.error) throw new Error(entitlementsResult.error.message);
 
-  // No entitlements row means the free tier: one slot.
   const slots = entitlementsResult.data?.program_slots ?? 1;
   return {
     slots,
@@ -34,7 +32,6 @@ export async function getSlotSummary(supabase: SupabaseClient) {
   };
 }
 
-/** Postgres errors raised by import_program / the slot trigger. */
 export function isSlotsFullError(error: { message: string }) {
   return error.message === "slots_full";
 }
