@@ -17,23 +17,22 @@ export function registerReplaceProgramTool(server: McpServer) {
     {
       title: "Replace program",
       description:
-        "Borra uno de los programas del usuario (con todo su historial de " +
-        "sesiones) y crea el nuevo en su slot, en una sola transacción. Úsala " +
-        "solo después de que import_program devolvió 'slots_full' y el usuario " +
-        "eligió explícitamente qué programa reemplazar. El borrado no se puede " +
-        "deshacer.",
+        "Deletes one of the user's programs (with its whole session history) " +
+        "and creates the new one in its slot, in a single transaction. Use it " +
+        "only after import_program returned 'slots_full' and the user explicitly " +
+        "chose which program to replace. The deletion cannot be undone.",
       inputSchema: {
         program: ProgramInputSchema,
         replace_program_id: z
           .uuid()
           .describe(
-            "id del programa que el usuario eligió reemplazar (de la lista que devolvió import_program).",
+            "id of the program the user chose to replace (from the list import_program returned).",
           ),
       },
       annotations: { readOnlyHint: false, destructiveHint: true },
     },
     async ({ program, replace_program_id }) => {
-      const accessToken = resolveUserAccessToken();
+      const accessToken = await resolveUserAccessToken();
       const supabase = createSupabaseClientForUser(accessToken);
 
       const { data, error } = await supabase.rpc("import_program", {
@@ -46,7 +45,7 @@ export function registerReplaceProgramTool(server: McpServer) {
           {
             error: "program_not_found",
             message:
-              "Ese programa no existe o no es del usuario. Nada se borró ni se creó.",
+              "That program does not exist or does not belong to the user. Nothing was deleted or created.",
           },
           true,
         );
