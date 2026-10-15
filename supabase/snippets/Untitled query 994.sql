@@ -1,1 +1,0 @@
-select * from ladder_steps
