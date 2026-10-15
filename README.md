@@ -8,6 +8,10 @@ Users already ask LLMs for training plans. Then they copy and paste the answer i
 
 ## Example conversation
 
+
+https://github.com/user-attachments/assets/16c1eb53-22c5-4629-85f5-9f9513657ac4
+
+
 From the demo recording (Claude Desktop + the trAIn app):
 
 ```text
