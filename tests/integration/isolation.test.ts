@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
-import { createTestUser, deleteTestUsers, type TestUser } from "./helpers/supabase";
-import { getProgram, importProgram, programIds, sampleProgram } from "./helpers/fixtures";
+import { createTestUser, deleteTestUsers, type TestUser } from "./supabase";
+import { getProgram, importProgram, programIds, sampleProgram } from "../fixtures";
 
 let owner: TestUser;
 let other: TestUser;

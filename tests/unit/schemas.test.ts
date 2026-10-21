@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { ProgramInputSchema } from "@/src/modules/mcp/schemas/program.schema";
-import { sampleProgram } from "./helpers/fixtures";
+import { sampleProgram } from "../fixtures";
 
 // These rules are what the agent sees as JSON Schema errors, before any SQL runs.
 describe("program input schema", () => {
