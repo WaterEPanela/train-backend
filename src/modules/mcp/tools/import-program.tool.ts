@@ -5,6 +5,11 @@ import {
   resolveUserAccessToken,
 } from "@/src/modules/supabase/client";
 import { ProgramInputSchema } from "@/src/modules/mcp/schemas/program.schema";
+import {
+  getSlotSummary,
+  isSlotsFullError,
+  jsonResult,
+} from "@/src/modules/mcp/tools/program-slots";
 
 export function registerImportProgramTool(server: McpServer) {
   server.registerTool(
@@ -12,33 +17,43 @@ export function registerImportProgramTool(server: McpServer) {
     {
       title: "Import program",
       description:
-        "Crea un Program completo (fases, session_slots, activities, ladder, " +
-          "progression_rule, collapse_rules) para el usuario autenticado. " +
-          "No sobrescribe un programa existente — cada llamada crea uno nuevo.",
+        "Creates a complete Program (phases, session_slots, activities, ladder, " +
+        "progression_rule, collapse_rules) for the authenticated user. " +
+        "Each program takes one of the user's slots (free accounts have 1). " +
+        "It never deletes anything: if no slot is free it fails with error " +
+        "'slots_full' and returns the user's current programs. In that case, ask " +
+        "the user which one to replace (warning them that program and all its " +
+        "history will be deleted) and call replace_program with the id they pick. " +
+        "Never choose which program to replace yourself.",
       inputSchema: { program: ProgramInputSchema },
+      annotations: { readOnlyHint: false, destructiveHint: false },
     },
     async ({ program }) => {
-      const accessToken = resolveUserAccessToken();
+      const accessToken = await resolveUserAccessToken();
       const supabase = createSupabaseClientForUser(accessToken);
 
       const { data, error } = await supabase.rpc("import_program", {
         payload: program,
       });
 
-      if (error) {
-        return {
-          isError: true,
-          content: [
-            { type: "text", text: JSON.stringify({ error: error.message }) },
-          ],
-        };
+      if (error && isSlotsFullError(error)) {
+        const summary = await getSlotSummary(supabase);
+        return jsonResult(
+          {
+            error: "slots_full",
+            message:
+              `The user is using ${summary.used} of ${summary.slots} slots. ` +
+              "To import this program they must choose one to replace (it is " +
+              "deleted along with its history) or get more slots.",
+            ...summary,
+          },
+          true,
+        );
       }
 
-      return {
-        content: [
-          { type: "text", text: JSON.stringify({ program_id: data }) },
-        ],
-      };
+      if (error) return jsonResult({ error: error.message }, true);
+
+      return jsonResult({ program_id: data });
     },
   );
 }
