@@ -1,10 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
-import {
-  createSupabaseClientForUser,
-  resolveUserAccessToken,
-} from "@/src/modules/supabase/client";
+import { getUserClient } from "@/src/modules/supabase/client";
 import { ProgramInputSchema } from "@/src/modules/mcp/schemas/program.schema";
 import {
   isProgramNotFoundError,
@@ -21,19 +18,18 @@ export function registerReplaceProgramTool(server: McpServer) {
         "and creates the new one in its slot, in a single transaction. Use it " +
         "only after import_program returned 'slots_full' and the user explicitly " +
         "chose which program to replace. The deletion cannot be undone.",
-      inputSchema: {
+      inputSchema: z.object({
         program: ProgramInputSchema,
         replace_program_id: z
           .uuid()
           .describe(
             "id of the program the user chose to replace (from the list import_program returned).",
           ),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: true },
     },
     async ({ program, replace_program_id }) => {
-      const accessToken = await resolveUserAccessToken();
-      const supabase = createSupabaseClientForUser(accessToken);
+      const supabase = await getUserClient();
 
       const { data, error } = await supabase.rpc("import_program", {
         payload: program,

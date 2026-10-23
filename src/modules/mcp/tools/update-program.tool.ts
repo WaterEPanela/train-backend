@@ -1,10 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
-import {
-  createSupabaseClientForUser,
-  resolveUserAccessToken,
-} from "@/src/modules/supabase/client";
+import { getUserClient } from "@/src/modules/supabase/client";
 import { ProgramOperationSchema } from "@/src/modules/mcp/schemas/program-operations.schema";
 import { jsonResult } from "@/src/modules/mcp/tools/program-slots";
 
@@ -37,7 +34,7 @@ export function registerUpdateProgramTool(server: McpServer) {
         "update_steps / update_activities with a list of ids instead of one operation " +
         "per item, and keep related changes in one call so they apply atomically. Describe the changes to the user and get their " +
         "agreement before calling it, especially removals.",
-      inputSchema: {
+      inputSchema: z.object({
         program_id: z.uuid(),
         expected_revision: z
           .number()
@@ -46,12 +43,11 @@ export function registerUpdateProgramTool(server: McpServer) {
           .optional()
           .describe("program.revision as returned by get_program."),
         operations: z.array(ProgramOperationSchema).min(1).max(500),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     },
     async ({ program_id, expected_revision, operations }) => {
-      const accessToken = await resolveUserAccessToken();
-      const supabase = createSupabaseClientForUser(accessToken);
+      const supabase = await getUserClient();
 
       const { data, error } = await supabase.rpc("update_program", {
         program_id,

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
 import { createTestUser, deleteTestUsers, type TestUser } from "./supabase";
-import { getProgram, importProgram, programIds, sampleProgram } from "../fixtures";
+import { getProgram, importProgram, logSession, programIds, sampleProgram } from "../fixtures";
 
 let owner: TestUser;
 let other: TestUser;
@@ -40,6 +40,25 @@ describe("row level security", () => {
       "program_not_found",
     ]);
     expect(await getProgram(owner.db, programId)).toEqual({ name: "Home calisthenics", revision: 1 });
+  });
+});
+
+describe("history", () => {
+  test("another user cannot read or delete the owner's sessions", async () => {
+    const ids = await programIds(owner.db, programId);
+    const sessionId = await logSession(owner.db, programId, ids, [
+      { activity: ids.rows, step: ids.rows.ladder_steps[0], values: [8] },
+    ]);
+
+    const logs = await other.db.rpc("get_logs", {});
+    const deleted = await other.db.rpc("delete_session_log", { session_log_id: sessionId });
+    const values = await other.db.rpc("last_values", { step_ids: [ids.rows.ladder_steps[0].id] });
+
+    expect(logs.data).toEqual({ sessions: [], next_cursor: null });
+    expect(deleted.error?.message).toBe("session_log_not_found");
+    expect(values.data).toEqual({});
+    const owned = await owner.db.rpc("get_logs", {});
+    expect(owned.data.sessions.map((s: { id: string }) => s.id)).toEqual([sessionId]);
   });
 });
 

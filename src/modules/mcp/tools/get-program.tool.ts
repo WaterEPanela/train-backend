@@ -1,10 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
-import {
-  createSupabaseClientForUser,
-  resolveUserAccessToken,
-} from "@/src/modules/supabase/client";
+import { getUserClient } from "@/src/modules/supabase/client";
 import { getSlotSummary, jsonResult } from "@/src/modules/mcp/tools/program-slots";
 
 const PROGRAM_SELECT =
@@ -170,8 +167,7 @@ export function registerGetProgramTool(server: McpServer) {
       annotations: { readOnlyHint: true },
     },
     async ({ program_id, detail, ...selectors }) => {
-      const accessToken = await resolveUserAccessToken();
-      const supabase = createSupabaseClientForUser(accessToken);
+      const supabase = await getUserClient();
 
       let query = supabase.from("programs").select(PROGRAM_SELECT);
       query = program_id
