@@ -13,7 +13,7 @@ function supabaseEnv() {
   return { url, anonKey };
 }
 
-export function createSupabaseClientForUser(accessToken: string) {
+function createSupabaseClientForUser(accessToken: string) {
   const { url, anonKey } = supabaseEnv();
 
   return createClient(url, anonKey, {
@@ -64,7 +64,7 @@ async function signInDevUser(email: string, password: string) {
   return devSession.token;
 }
 
-export async function resolveUserAccessToken(): Promise<string> {
+async function resolveUserAccessToken(): Promise<string> {
   const email = process.env.MCP_DEV_EMAIL;
   const password = process.env.MCP_DEV_PASSWORD;
   if (email && password) return signInDevUser(email, password);
@@ -86,4 +86,8 @@ export async function resolveUserAccessToken(): Promise<string> {
   }
 
   return token;
+}
+
+export async function getUserClient() {
+  return createSupabaseClientForUser(await resolveUserAccessToken());
 }

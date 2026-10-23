@@ -1,10 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
-import {
-  createSupabaseClientForUser,
-  resolveUserAccessToken,
-} from "@/src/modules/supabase/client";
+import { getUserClient } from "@/src/modules/supabase/client";
 import { jsonResult } from "@/src/modules/mcp/tools/program-slots";
 
 const MeasurementSchema = z.object({
@@ -62,8 +59,15 @@ export function registerLogSessionTool(server: McpServer) {
         "Activities done outside the plan go in extras; they are logged by name " +
         "and only join the plan with add_to_plan. It only adds data and never " +
         "changes earlier sessions.",
-      inputSchema: {
+      inputSchema: z.object({
         program_id: z.uuid(),
+        client_id: z
+          .uuid()
+          .optional()
+          .describe(
+            "Generate one random uuid per session and reuse it if you retry the call; " +
+              "a repeated client_id returns the first log instead of logging twice.",
+          ),
         session_slot_id: z
           .uuid()
           .optional()
@@ -89,7 +93,7 @@ export function registerLogSessionTool(server: McpServer) {
           .array(ExtraSchema)
           .optional()
           .describe("Activities the user did that are not in the plan."),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     async (input) => {
@@ -100,8 +104,7 @@ export function registerLogSessionTool(server: McpServer) {
         );
       }
 
-      const accessToken = await resolveUserAccessToken();
-      const supabase = createSupabaseClientForUser(accessToken);
+      const supabase = await getUserClient();
 
       const { data, error } = await supabase.rpc("log_session", { payload: input });
 

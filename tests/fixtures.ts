@@ -81,3 +81,28 @@ export async function getProgram(db: SupabaseClient, programId: string) {
   if (error) throw error;
   return data;
 }
+
+type Ids = Awaited<ReturnType<typeof programIds>>;
+
+export type LoggedSet = { activity: Ids["pushUps"]; step: { id: string }; values: number[] };
+
+export async function logSession(
+  db: SupabaseClient,
+  programId: string,
+  ids: Ids,
+  sets: LoggedSet[],
+  extra: { date?: string; notes?: string; extras?: unknown[] } = {},
+) {
+  const { data, error } = await db.rpc("log_session", {
+    payload: {
+      program_id: programId,
+      session_slot_id: ids.slotId,
+      ...extra,
+      measurements: sets.flatMap(({ activity, step, values }) =>
+        values.map((value, i) => ({ activity_id: activity.id, step_id: step.id, value, sequence: i + 1 })),
+      ),
+    },
+  });
+  if (error) throw error;
+  return data.session_log_id as string;
+}

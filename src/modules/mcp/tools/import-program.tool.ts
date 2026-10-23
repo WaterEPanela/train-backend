@@ -1,9 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
+import { z } from "zod";
 
-import {
-  createSupabaseClientForUser,
-  resolveUserAccessToken,
-} from "@/src/modules/supabase/client";
+import { getUserClient } from "@/src/modules/supabase/client";
 import { ProgramInputSchema } from "@/src/modules/mcp/schemas/program.schema";
 import {
   getSlotSummary,
@@ -25,12 +23,11 @@ export function registerImportProgramTool(server: McpServer) {
         "the user which one to replace (warning them that program and all its " +
         "history will be deleted) and call replace_program with the id they pick. " +
         "Never choose which program to replace yourself.",
-      inputSchema: { program: ProgramInputSchema },
+      inputSchema: z.object({ program: ProgramInputSchema }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     async ({ program }) => {
-      const accessToken = await resolveUserAccessToken();
-      const supabase = createSupabaseClientForUser(accessToken);
+      const supabase = await getUserClient();
 
       const { data, error } = await supabase.rpc("import_program", {
         payload: program,
